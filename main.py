@@ -1,6 +1,6 @@
 import pygame
-import sys
 import random
+import asyncio
 
 pygame.init()
 pygame.mixer.init()
@@ -43,7 +43,7 @@ DIFFICULTY_SETTINGS = {
     },
     'normal': {
         'lives': 3,
-        'time_limit_base': 180,
+        'time_limit_base': 120,
         'gravity': 0.9,
         'jump_power': -16,
         'has_bouncy': True,
@@ -165,7 +165,6 @@ TRANSLATIONS = {
     }
 }
 
-
 # ========== SESSION STATS (IN-MEMORY) ==========
 stats = {
     "easy": {
@@ -187,7 +186,6 @@ stats = {
     },
     "total_xp": 0,
 }
-
 
 # ========== FONT AND TEXT HELPERS ==========
 
@@ -218,10 +216,10 @@ def draw_text_centered(surface, text, rect, font, color):
 def load_image(filename, size, fallback_color):
     try:
         image = pygame.image.load(filename).convert_alpha()
-        return pygame.transform.scale(image, size)
+        return pygame.transform.smoothscale(image, size)
     except:
         surface = pygame.Surface(size)
-        surface.fill(fallback_color)
+        # surface.fill(fallback_color)
         return surface
 
 
@@ -343,7 +341,7 @@ class SoundManager:
             audio_key = 'normal_instructions'
         elif mode == 'hard':
             audio_key = 'hard_instructions'
-        
+
         if audio_key and self.sounds.get(audio_key):
             try:
                 self.instruction_audio_playing = self.sounds[audio_key]
@@ -400,12 +398,12 @@ def wrap_text(font, text, max_width, padding=15):
     words = text.split(' ')
     lines = []
     current_line = []
-    
+
     for word in words:
         # Test if adding this word would exceed width
         test_line = ' '.join(current_line + [word])
         test_surface = font.render(test_line, True, WHITE)
-        
+
         if test_surface.get_width() <= max_width - (padding * 2):
             current_line.append(word)
         else:
@@ -413,7 +411,7 @@ def wrap_text(font, text, max_width, padding=15):
             if current_line:
                 lines.append(' '.join(current_line))
             current_line = [word]
-    
+
     # Add the last line
     if current_line:
         lines.append(' '.join(current_line))
@@ -421,7 +419,7 @@ def wrap_text(font, text, max_width, padding=15):
     rendered_lines = []
     for line in lines:
         rendered_lines.append(font.render(line, True, WHITE))
-    
+
     return rendered_lines
 
 
@@ -448,22 +446,23 @@ class Particle:
         self.lifetime = random.uniform(1.5, 2.5)  # Seconds
         self.age = 0.0
         self.shape = random.choice(['rect', 'circle'])
-    
+
     def update(self, dt):
         self.age += dt
         self.vel_y += self.gravity
         self.x += self.vel_x
         self.y += self.vel_y
-    
+
     def is_alive(self):
         return self.age < self.lifetime
-    
+
     def draw(self, screen):
         alpha = int(255 * (1.0 - self.age / self.lifetime))
         if self.shape == 'rect':
             pygame.draw.rect(screen, self.color, (int(self.x), int(self.y), self.size, self.size))
         else:
-            pygame.draw.circle(screen, self.color, (int(self.x + self.size//2), int(self.y + self.size//2)), self.size//2)
+            pygame.draw.circle(screen, self.color, (int(self.x + self.size // 2), int(self.y + self.size // 2)),
+                               self.size // 2)
 
 
 # ========== IMAGE BUTTON ==========
@@ -506,7 +505,7 @@ class RunnerPlayer(pygame.sprite.Sprite):
         self.vel_y = 0
         self.on_ground = False
         self.jump_power = -18
-        self.gravity = 1.0
+        self.gravity = 0.8
 
     def update(self):
         self.vel_y += self.gravity
@@ -529,7 +528,7 @@ class ScrollingObstacle(pygame.sprite.Sprite):
         super().__init__()
         try:
             obstacle_img = pygame.image.load('assets/images/obstacle_image.png').convert_alpha()
-            self.image = pygame.transform.scale(obstacle_img, (width, height))
+            self.image = pygame.transform.smoothscale(obstacle_img, (width, height))
         except:
             self.image = load_image('obstacle.png', (width, height), GRAY)
         self.rect = self.image.get_rect()
@@ -561,7 +560,7 @@ class ScrollingCoin(pygame.sprite.Sprite):
 class ScrollingHint(pygame.sprite.Sprite):
     def __init__(self, x, y, scroll_speed, question_data):
         super().__init__()
-        self.image = load_image('assets/images/knowledge.png', (35, 35), YELLOW)
+        self.image = load_image('assets/images/knowledge.png', (30, 38), YELLOW)
         self.rect = self.image.get_rect()
         self.rect.x = x
         self.rect.y = y
@@ -577,7 +576,7 @@ class ScrollingHint(pygame.sprite.Sprite):
 class ScrollingQuestionTrigger(pygame.sprite.Sprite):
     def __init__(self, x, y, scroll_speed, question_data):
         super().__init__()
-        self.image = load_image('assets/images/question.png', (60, 60), ORANGE)
+        self.image = load_image('assets/images/question.png', (70, 50), ORANGE)
         self.rect = self.image.get_rect()
         self.rect.x = x
         self.rect.y = y
@@ -607,12 +606,30 @@ class FinishLine(pygame.sprite.Sprite):
 # ========== PLATFORMER CLASSES (NORMAL/HARD MODE) ==========
 
 class Player(pygame.sprite.Sprite):
-    def __init__(self, x, y, settings, player_image=None):
+    def __init__(self, x, y, settings, player_image_right=None, player_image_left=None):
         super().__init__()
-        if player_image:
-            self.image = player_image.copy()
+
+        # Load right-facing image
+        if player_image_right:
+            self.image_right = player_image_right.copy()
         else:
-            self.image = load_image('assets/images/player.png', (65, 70), RED)
+            self.image_right = load_image('assets/images/player_right.png', (65, 70), RED)
+
+        # Load left-facing image
+        if player_image_left:
+            self.image_left = player_image_left.copy()
+        else:
+            try:
+                loaded_left = pygame.image.load('assets/images/player_left.png').convert_alpha()
+                self.image_left = pygame.transform.smoothscale(loaded_left, (65, 70))
+            except:
+                # If left image not found, flip the right image
+                self.image_left = pygame.transform.flip(self.image_right, True, False)
+
+        # Start facing right
+        self.image = self.image_right
+        self.facing_right = True
+
         self.rect = self.image.get_rect()
         self.rect.x = x
         self.rect.y = y
@@ -624,12 +641,18 @@ class Player(pygame.sprite.Sprite):
     def update(self, platforms, bouncy_platforms):
         keys = pygame.key.get_pressed()
 
-        # Horizontal movement
+        # Horizontal movement with direction change
         move_speed = 7
         if keys[pygame.K_LEFT] or keys[pygame.K_a]:
             self.rect.x -= move_speed
+            # Change to left-facing sprite
+            self.facing_right = False
+            self.image = self.image_left
         if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
             self.rect.x += move_speed
+            # Change to right-facing sprite
+            self.facing_right = True
+            self.image = self.image_right
 
         if self.rect.left < 0:
             self.rect.left = 0
@@ -719,7 +742,7 @@ class Enemy(pygame.sprite.Sprite):
         super().__init__()
         try:
             villain_img = pygame.image.load('assets/images/villain_image.png').convert_alpha()
-            self.image = pygame.transform.scale(villain_img, (50, 50))
+            self.image = pygame.transform.smoothscale(villain_img, (65, 65))
         except:
             self.image = load_image('enemy.png', (30, 30), RED)
         self.rect = self.image.get_rect()
@@ -748,7 +771,7 @@ class Door(pygame.sprite.Sprite):
 class QuestionTrigger(pygame.sprite.Sprite):
     def __init__(self, x, y, question_data):
         super().__init__()
-        self.image = load_image('assets/images/question.png', (60, 60), ORANGE)
+        self.image = load_image('assets/images/question.png', (70, 50), ORANGE)
         self.rect = self.image.get_rect()
         self.rect.x = x
         self.rect.y = y
@@ -847,26 +870,40 @@ class Game:
         self.sound_manager.play_background_music()
 
     def load_images(self):
+        # Load directional player images
         try:
-            self.player_image = pygame.image.load('assets/images/player.png').convert_alpha()
-            self.player_image = pygame.transform.scale(self.player_image, (65, 70))
+            self.player_image_right = pygame.image.load('assets/images/player_right.png').convert_alpha()
+            self.player_image_right = pygame.transform.smoothscale(self.player_image_right, (65, 70))
         except:
-            self.player_image = None
+            self.player_image_right = None
 
         try:
-            self.heart_image = pygame.image.load('assets/images/heart1.png').convert_alpha()
-            self.heart_image = pygame.transform.scale(self.heart_image, (20, 20))
+            self.player_image_left = pygame.image.load('assets/images/player_left.png').convert_alpha()
+            self.player_image_left = pygame.transform.smoothscale(self.player_image_left, (65, 70))
+        except:
+            # If left image not found, flip the right image
+            if self.player_image_right:
+                self.player_image_left = pygame.transform.flip(self.player_image_right, True, False)
+            else:
+                self.player_image_left = None
+
+        # Set default player_image to right-facing
+        self.player_image = self.player_image_right
+
+        try:
+            self.heart_image = pygame.image.load('assets/images/heart.png').convert_alpha()
+            self.heart_image = pygame.transform.smoothscale(self.heart_image, (20, 20))
         except:
             self.heart_image = None
 
         self.menu_bg = load_image(
-            'assets/images/menu_bg.jpg',
+            'assets/images/menu_bg.png',
             (SCREEN_WIDTH, SCREEN_HEIGHT),
             RED
         )
 
         try:
-            easy_bg_original = pygame.image.load('assets/images/easy_bg2.jpg').convert()
+            easy_bg_original = pygame.image.load('assets/images/easy_bg.png').convert()
             original_width = easy_bg_original.get_width()
             original_height = easy_bg_original.get_height()
             scale_factor = SCREEN_HEIGHT / original_height
@@ -878,7 +915,7 @@ class Game:
             self.easy_bg_width = SCREEN_WIDTH
 
         try:
-            normal_bg_original = pygame.image.load('assets/images/normal_bg.jpg').convert()
+            normal_bg_original = pygame.image.load('assets/images/normal_bg.png').convert()
             original_width = normal_bg_original.get_width()
             original_height = normal_bg_original.get_height()
             scale_factor = SCREEN_HEIGHT / original_height
@@ -890,7 +927,7 @@ class Game:
             self.normal_bg_width = SCREEN_WIDTH
 
         try:
-            hard_bg_original = pygame.image.load('assets/images/hard_bg.jpg').convert()
+            hard_bg_original = pygame.image.load('assets/images/hard_bg.png').convert()
             original_width = hard_bg_original.get_width()
             original_height = hard_bg_original.get_height()
             scale_factor = SCREEN_WIDTH / original_width
@@ -916,10 +953,10 @@ class Game:
 
         try:
             if self.language == 'en':
-                victory_original = pygame.image.load('assets/images/victory_image.jpg').convert()
+                victory_original = pygame.image.load('assets/images/victory_image.png').convert()
                 self.victory_bg = pygame.transform.scale(victory_original, (SCREEN_WIDTH, SCREEN_HEIGHT))
             else:
-                victory_original = pygame.image.load('assets/images/victory_image_mk.jpg').convert()
+                victory_original = pygame.image.load('assets/images/victory_image_mk.png').convert()
                 self.victory_bg = pygame.transform.scale(victory_original, (SCREEN_WIDTH, SCREEN_HEIGHT))
         except:
             self.victory_bg = None
@@ -935,8 +972,8 @@ class Game:
             self.game_over_bg = None
 
         try:
-            menu_button_original = pygame.image.load('assets/images/menu_button.png').convert_alpha()
-            self.menu_button_img = pygame.transform.scale(menu_button_original, (180, 60))
+            menu_button_original = pygame.image.load('assets/images/button.png').convert_alpha()
+            self.menu_button_img = pygame.transform.smoothscale(menu_button_original, (180, 60))
             self.menu_button_hover = self.menu_button_img.copy()
             self.menu_button_hover.fill((50, 50, 50, 0), special_flags=pygame.BLEND_RGBA_ADD)
         except:
@@ -944,8 +981,8 @@ class Game:
             self.menu_button_hover = None
 
         try:
-            next_button_original = pygame.image.load('assets/images/next_button.png').convert_alpha()
-            self.next_button_img = pygame.transform.scale(next_button_original, (180, 60))
+            next_button_original = pygame.image.load('assets/images/button2.png').convert_alpha()
+            self.next_button_img = pygame.transform.smoothscale(next_button_original, (180, 60))
             self.next_button_hover = self.next_button_img.copy()
             self.next_button_hover.fill((50, 50, 50, 0), special_flags=pygame.BLEND_RGBA_ADD)
         except:
@@ -954,7 +991,7 @@ class Game:
 
         try:
             profile_button_original = pygame.image.load('assets/images/profile_button.png').convert_alpha()
-            self.profile_button_img = pygame.transform.scale(profile_button_original, (60, 60))
+            self.profile_button_img = pygame.transform.smoothscale(profile_button_original, (60, 60))
             self.profile_button_hover = self.profile_button_img.copy()
             self.profile_button_hover.fill((50, 50, 50, 0), special_flags=pygame.BLEND_RGBA_ADD)
         except:
@@ -963,7 +1000,7 @@ class Game:
 
         try:
             back_button_original = pygame.image.load('assets/images/back_button.png').convert_alpha()
-            self.back_button_img = pygame.transform.scale(back_button_original, (70, 30))
+            self.back_button_img = pygame.transform.smoothscale(back_button_original, (70, 40))
             self.back_button_hover = self.back_button_img.copy()
             self.back_button_hover.fill((50, 50, 50, 0), special_flags=pygame.BLEND_RGBA_ADD)
         except:
@@ -981,20 +1018,20 @@ class Game:
                 self.shop_bg = None
 
         try:
-            self.shop_heart_img = pygame.image.load('assets/images/heart1.png').convert_alpha()
-            self.shop_heart_img = pygame.transform.scale(self.shop_heart_img, (100, 100))
+            self.shop_heart_img = pygame.image.load('assets/images/heart.png').convert_alpha()
+            self.shop_heart_img = pygame.transform.smoothscale(self.shop_heart_img, (100, 100))
         except:
             self.shop_heart_img = None
 
         try:
             self.shop_time_img = pygame.image.load('assets/images/time.png').convert_alpha()
-            self.shop_time_img = pygame.transform.scale(self.shop_time_img, (100, 100))
+            self.shop_time_img = pygame.transform.smoothscale(self.shop_time_img, (100, 100))
         except:
             self.shop_time_img = None
 
         try:
-            play_button_original = pygame.image.load('assets/images/play_button.png').convert_alpha()
-            self.play_button_img = pygame.transform.scale(play_button_original, (180, 60))
+            play_button_original = pygame.image.load('assets/images/button.png').convert_alpha()
+            self.play_button_img = pygame.transform.smoothscale(play_button_original, (180, 60))
             self.play_button_hover = self.play_button_img.copy()
             self.play_button_hover.fill((50, 50, 50, 0), special_flags=pygame.BLEND_RGBA_ADD)
         except:
@@ -1003,7 +1040,7 @@ class Game:
 
         try:
             sound_button_original = pygame.image.load('assets/images/sound_button.png').convert_alpha()
-            self.sound_button_img = pygame.transform.scale(sound_button_original, (60, 60))
+            self.sound_button_img = pygame.transform.smoothscale(sound_button_original, (50, 50))
             self.sound_button_hover = self.sound_button_img.copy()
             self.sound_button_hover.fill((50, 50, 50, 0), special_flags=pygame.BLEND_RGBA_ADD)
         except:
@@ -1876,9 +1913,9 @@ class Game:
         scroll_speed = base_speed + (self.current_level - 1) * 1.5
 
         level_length = 4000 + (self.current_level * 1000)
-        obstacle_chance = 0.25 + (self.current_level * 0.05)
-        min_spacing = 150 - (self.current_level * 10)
-        max_spacing = 250 - (self.current_level * 15)
+        obstacle_chance = 0.20 + (self.current_level * 0.05)  # 0.20
+        min_spacing = 100 - (self.current_level * 10)
+        max_spacing = 200 - (self.current_level * 15)
 
         current_x = 800
         questions = self.get_level_questions('easy', self.current_level)
@@ -1899,7 +1936,7 @@ class Game:
                 self.all_sprites.add(obstacle)
                 current_x += width + random.randint(min_spacing, max_spacing)
 
-            if random.random() < 0.5:
+            if random.random() < 0.85:
                 coin_height = random.choice([
                     SCREEN_HEIGHT - 150,
                     SCREEN_HEIGHT - 250,
@@ -1919,13 +1956,15 @@ class Game:
                     )
                     self.question_triggers.add(q)
                     self.all_sprites.add(q)
-                    if 'hint' in questions[question_index].get('en', {}) and questions[question_index]['en'].get('hint'):
+                    if 'hint' in questions[question_index].get('en', {}) and questions[question_index]['en'].get(
+                            'hint'):
                         hint_height = random.choice([
                             SCREEN_HEIGHT - 150,
                             SCREEN_HEIGHT - 250,
                             SCREEN_HEIGHT - 80
                         ])
-                        hint = ScrollingHint(current_x + random.randint(-200, 200), hint_height, scroll_speed, questions[question_index])
+                        hint = ScrollingHint(current_x + random.randint(-200, 200), hint_height, scroll_speed,
+                                             questions[question_index])
                         self.hints_group.add(hint)
                         self.all_sprites.add(hint)
                 question_index += 1
@@ -1952,7 +1991,7 @@ class Game:
         settings['enemy_speed'] = settings['enemy_speed_base'] + (self.current_level - 1) * 0.8
         settings['time_limit'] = settings['time_limit_base'] - (self.current_level - 1) * 10
 
-        self.player = Player(50, SCREEN_HEIGHT - 100, settings, self.player_image)
+        self.player = Player(50, SCREEN_HEIGHT - 100, settings, self.player_image_right, self.player_image_left)
         self.all_sprites.add(self.player)
 
         questions = self.get_level_questions('normal', self.current_level)
@@ -1973,7 +2012,8 @@ class Game:
                 self.coins_group.add(c)
                 self.all_sprites.add(c)
 
-            e = Enemy(400, SCREEN_HEIGHT - 80, settings['enemy_speed'])
+            door_x = 900
+            e = Enemy(400, SCREEN_HEIGHT - 80, settings['enemy_speed'], patrol_start=0, patrol_end=door_x - 20)
             self.enemies.add(e)
             self.all_sprites.add(e)
 
@@ -1990,7 +2030,7 @@ class Game:
                     self.hints_group.add(hint)
                     self.all_sprites.add(hint)
 
-            door = Door(900, SCREEN_HEIGHT - 130)
+            door = Door(door_x, SCREEN_HEIGHT - 130)
             self.doors.add(door)
             self.all_sprites.add(door)
 
@@ -2012,8 +2052,9 @@ class Game:
                 self.coins_group.add(c)
                 self.all_sprites.add(c)
 
-            e1 = Enemy(300, SCREEN_HEIGHT - 80, settings['enemy_speed'])
-            e2 = Enemy(600, SCREEN_HEIGHT - 80, settings['enemy_speed'])
+            door_x = 880
+            e1 = Enemy(300, SCREEN_HEIGHT - 80, settings['enemy_speed'], patrol_start=0, patrol_end=door_x - 20)
+            e2 = Enemy(600, SCREEN_HEIGHT - 80, settings['enemy_speed'], patrol_start=0, patrol_end=door_x - 20)
             self.enemies.add(e1, e2)
             self.all_sprites.add(e1, e2)
 
@@ -2030,7 +2071,7 @@ class Game:
                     self.hints_group.add(hint)
                     self.all_sprites.add(hint)
 
-            door = Door(880, SCREEN_HEIGHT - 130)
+            door = Door(door_x, SCREEN_HEIGHT - 130)
             self.doors.add(door)
             self.all_sprites.add(door)
 
@@ -2053,9 +2094,10 @@ class Game:
                 self.coins_group.add(c)
                 self.all_sprites.add(c)
 
-            e1 = Enemy(250, SCREEN_HEIGHT - 80, settings['enemy_speed'])
-            e2 = Enemy(500, SCREEN_HEIGHT - 80, settings['enemy_speed'])
-            e3 = Enemy(350, 280, settings['enemy_speed'] * 0.7)
+            door_x = 920
+            e1 = Enemy(250, SCREEN_HEIGHT - 80, settings['enemy_speed'], patrol_start=0, patrol_end=door_x - 20)
+            e2 = Enemy(500, SCREEN_HEIGHT - 80, settings['enemy_speed'], patrol_start=0, patrol_end=door_x - 20)
+            e3 = Enemy(350, 280, settings['enemy_speed'], patrol_start=0, patrol_end=door_x - 20)
             self.enemies.add(e1, e2, e3)
             self.all_sprites.add(e1, e2, e3)
 
@@ -2072,7 +2114,7 @@ class Game:
                     self.hints_group.add(hint)
                     self.all_sprites.add(hint)
 
-            door = Door(920, SCREEN_HEIGHT - 130)
+            door = Door(door_x, SCREEN_HEIGHT - 130)
             self.doors.add(door)
             self.all_sprites.add(door)
 
@@ -2097,12 +2139,12 @@ class Game:
                 self.coins_group.add(c)
                 self.all_sprites.add(c)
 
-            e1 = Enemy(200, SCREEN_HEIGHT - 80, settings['enemy_speed'])
-            e2 = Enemy(500, SCREEN_HEIGHT - 80, settings['enemy_speed'])
-            e3 = Enemy(330, 260, settings['enemy_speed'] * 0.8)
-            e4 = Enemy(650, 260, settings['enemy_speed'] * 0.8)
-            self.enemies.add(e1, e2, e3, e4)
-            self.all_sprites.add(e1, e2, e3, e4)
+            door_x = 900
+            e1 = Enemy(200, SCREEN_HEIGHT - 80, settings['enemy_speed'], patrol_start=0, patrol_end=door_x - 20)
+            e2 = Enemy(500, SCREEN_HEIGHT - 80, settings['enemy_speed'], patrol_start=0, patrol_end=door_x - 20)
+            e3 = Enemy(330, 260, settings['enemy_speed'], patrol_start=0, patrol_end=door_x - 20)
+            self.enemies.add(e1, e2, e3)
+            self.all_sprites.add(e1, e2, e3)
 
             for i, q_data in enumerate(questions):
                 q = QuestionTrigger(280 + i * 180, 100, q_data)
@@ -2117,7 +2159,7 @@ class Game:
                     self.hints_group.add(hint)
                     self.all_sprites.add(hint)
 
-            door = Door(900, SCREEN_HEIGHT - 130)
+            door = Door(door_x, SCREEN_HEIGHT - 130)
             self.doors.add(door)
             self.all_sprites.add(door)
 
@@ -2144,13 +2186,13 @@ class Game:
                 self.coins_group.add(c)
                 self.all_sprites.add(c)
 
-            e1 = Enemy(150, SCREEN_HEIGHT - 80, settings['enemy_speed'])
-            e2 = Enemy(450, SCREEN_HEIGHT - 80, settings['enemy_speed'])
-            e3 = Enemy(750, SCREEN_HEIGHT - 80, settings['enemy_speed'])
-            e4 = Enemy(270, 320, settings['enemy_speed'] * 0.9)
-            e5 = Enemy(550, 160, settings['enemy_speed'] * 0.9)
-            self.enemies.add(e1, e2, e3, e4, e5)
-            self.all_sprites.add(e1, e2, e3, e4, e5)
+            door_x = 950
+            e1 = Enemy(150, SCREEN_HEIGHT - 80, settings['enemy_speed'], patrol_start=0, patrol_end=door_x - 20)
+            e2 = Enemy(450, SCREEN_HEIGHT - 80, settings['enemy_speed'], patrol_start=0, patrol_end=door_x - 20)
+            e3 = Enemy(750, SCREEN_HEIGHT - 80, settings['enemy_speed'], patrol_start=0, patrol_end=door_x - 20)
+            e4 = Enemy(270, 320, settings['enemy_speed'] * 0.5, patrol_start=0, patrol_end=door_x - 20)
+            self.enemies.add(e1, e2, e3, e4)
+            self.all_sprites.add(e1, e2, e3, e4)
 
             for i, q_data in enumerate(questions):
                 q = QuestionTrigger(250 + i * 200, 80, q_data)
@@ -2165,7 +2207,7 @@ class Game:
                     self.hints_group.add(hint)
                     self.all_sprites.add(hint)
 
-            door = Door(950, SCREEN_HEIGHT - 130)
+            door = Door(door_x, SCREEN_HEIGHT - 130)
             self.doors.add(door)
             self.all_sprites.add(door)
 
@@ -2179,7 +2221,8 @@ class Game:
         self.hints_group = pygame.sprite.Group()
 
         settings = DIFFICULTY_SETTINGS['hard']
-        self.player = Player(SCREEN_WIDTH // 2, SCREEN_HEIGHT - 100, settings, self.player_image)
+        self.player = Player(SCREEN_WIDTH // 2, SCREEN_HEIGHT - 100, settings, self.player_image_right,
+                             self.player_image_left)
         self.all_sprites.add(self.player)
 
         floor = Platform(SCREEN_WIDTH // 2 - 50, SCREEN_HEIGHT - 30, 100, 30, GREEN)
@@ -2249,11 +2292,11 @@ class Game:
     def find_nearest_platform_below(self, player_y):
         nearest_platform = None
         min_distance = float('inf')
-        
+
         # Target: find platform closest to screen bottom (most accessible)
         # This ensures player respawns in a visible/accessible area
         target_y = SCREEN_HEIGHT - 50
-        
+
         # Check all platforms - find the one closest to screen bottom
         for platform in self.platforms:
             platform_y = platform.rect.top
@@ -2262,14 +2305,14 @@ class Game:
                 if distance < min_distance:
                     min_distance = distance
                     nearest_platform = platform
-        
+
         # If no suitable platform found, use the floor platform
         if nearest_platform is None:
             for platform in self.platforms:
                 if platform.rect.y >= SCREEN_HEIGHT - 50:  # Floor platform
                     nearest_platform = platform
                     break
-        
+
         return nearest_platform
 
     def start_game(self, difficulty):
@@ -2342,7 +2385,7 @@ class Game:
             self.sound_manager.play_coin()
             self.show_result = True
             self.result_correct = True
-            
+
             # Create confetti particles
             self.confetti_particles = []
             center_x = SCREEN_WIDTH // 2
@@ -2364,7 +2407,7 @@ class Game:
                 self.lives -= 1
             self.show_result = True
             self.result_correct = False
-            
+
             # Trigger camera shake
             self.shake_timer = 0.0
             self.shake_intensity = 15.0  # Initial shake intensity
@@ -2728,8 +2771,9 @@ class Game:
 
         t = TRANSLATIONS[self.language]
 
-        imageTitle = load_image('assets/images/title.png', (300, 150), YELLOW)
-        self.screen.blit(imageTitle, (SCREEN_WIDTH // 2 - 150, 50))
+        self.title_original = pygame.image.load('assets/images/title.png').convert_alpha()
+        self.title_image = pygame.transform.smoothscale(self.title_original, (300, 150))
+        self.screen.blit(self.title_image, (SCREEN_WIDTH // 2 - 150, 50))
 
         # Profile button
         if self.profile_button_img:
@@ -2748,12 +2792,12 @@ class Game:
         easy = self.font.render(f"1. {t['easy']}", True, (27, 51, 135))
         normal = self.font.render(f"2. {t['normal']}", True, (27, 51, 135))
         hard = self.font.render(f"3. {t['hard']}", True, (27, 51, 135))
-        lang = self.small_font.render(t['language'], True, (250, 250, 250))
+        lang = self.small_font.render(t['language'], True, (27, 51, 135))
 
-        self.screen.blit(easy, (SCREEN_WIDTH // 2 - easy.get_width() // 2, 240))
-        self.screen.blit(normal, (SCREEN_WIDTH // 2 - normal.get_width() // 2, 310))
-        self.screen.blit(hard, (SCREEN_WIDTH // 2 - hard.get_width() // 2, 380))
-        self.screen.blit(lang, (SCREEN_WIDTH // 2 - lang.get_width() // 2, 515))
+        self.screen.blit(easy, (SCREEN_WIDTH // 2 - easy.get_width() // 2, 225))
+        self.screen.blit(normal, (SCREEN_WIDTH // 2 - normal.get_width() // 2, 295))
+        self.screen.blit(hard, (SCREEN_WIDTH // 2 - hard.get_width() // 2, 365))
+        self.screen.blit(lang, (SCREEN_WIDTH // 2 - lang.get_width() // 2, 475))
 
     def draw_playing(self):
         if DIFFICULTY_SETTINGS[self.difficulty]['auto_run']:
@@ -2785,14 +2829,11 @@ class Game:
             else:
                 self.screen.fill(SKY_BLUE)
 
-        if not DIFFICULTY_SETTINGS[self.difficulty].get('is_vertical'):
-            pygame.draw.rect(self.screen, GREEN, (0, SCREEN_HEIGHT - 50, SCREEN_WIDTH, 50))
-
         self.all_sprites.draw(self.screen)
 
         t = TRANSLATIONS[self.language]
 
-        level_text = self.small_font.render(f"{t['level']} {self.current_level}/5", True, BLACK)
+        level_text = self.small_font.render(f"{t['level']} {self.current_level}/5", True, (27, 51, 135))
         self.screen.blit(level_text, (SCREEN_WIDTH - 150, 10))
 
         lives_text = self.small_font.render(f"{t['lives']}: ", True, RED)
@@ -2805,57 +2846,49 @@ class Game:
             lives_num = self.small_font.render(str(self.lives), True, RED)
             self.screen.blit(lives_num, (10 + lives_text.get_width(), 10))
 
-        coins_text = self.small_font.render(f"{t['coins']}: {self.coins}", True, BLACK)
+        coins_text = self.small_font.render(f"{t['coins']}: {self.coins}", True, (27, 51, 135))
         self.screen.blit(coins_text, (10, 40))
 
         if DIFFICULTY_SETTINGS[self.difficulty]['auto_run']:
-            distance_text = self.small_font.render(f"{t['distance']}: {self.distance // 10}m", True, WHITE)
+            distance_text = self.small_font.render(f"{t['distance']}: {int(self.distance // 10)}m", True, (27, 51, 135))
             self.screen.blit(distance_text, (10, 70))
 
-            hint_text = self.small_font.render(t['jump'], True, WHITE)
-            self.screen.blit(hint_text, (SCREEN_WIDTH // 2 - hint_text.get_width() // 2, 20))
+            # hint_text = self.small_font.render(t['jump'], True, BLACK)
+            # self.screen.blit(hint_text, (SCREEN_WIDTH // 2 - hint_text.get_width() // 2, 20))
 
         elif DIFFICULTY_SETTINGS[self.difficulty]['is_vertical']:
-            altitude_text = self.small_font.render(f"{t['altitude']}: {int(self.altitude)}m", True, WHITE)
+            altitude_text = self.small_font.render(f"{t['altitude']}: {int(self.altitude)}m", True, (27, 51, 135))
             self.screen.blit(altitude_text, (10, 70))
 
-            best_text = self.small_font.render(f"{t['best']}: {self.high_score_hard}m", True, YELLOW)
+            best_text = self.small_font.render(f"{t['best']}: {self.high_score_hard}m", True, (27, 51, 135))
             self.screen.blit(best_text, (10, 100))
 
-            if hasattr(self.player, 'jumps_left'):
-                jump_text = self.small_font.render(f"Jumps: {self.player.jumps_left}", True, WHITE)
-                self.screen.blit(jump_text, (SCREEN_WIDTH - 120, 50))
-            
             # Display fall warning message if active
             if self.show_fall_warning:
                 warning_text = render_text_with_outline(
-                    self.game_font_small, 
-                    t['fall_warning'], 
-                    RED, 
-                    BLACK, 
-                    3
+                    self.game_font,
+                    t['fall_warning'],
+                    WHITE,
+                    BLACK,
+                    2
                 )
                 self.screen.blit(
-                    warning_text, 
-                    (SCREEN_WIDTH // 2 - warning_text.get_width() // 2, 
+                    warning_text,
+                    (SCREEN_WIDTH // 2 - warning_text.get_width() // 2,
                      SCREEN_HEIGHT // 2 - warning_text.get_height() // 2)
                 )
         else:
-            time_text = self.small_font.render(f"{t['time']}: {int(self.time_left)}s", True, BLACK)
+            time_text = self.small_font.render(f"{t['time']}: {int(self.time_left)}s", True, (27, 51, 135))
             self.screen.blit(time_text, (10, 70))
 
-        if self.shield_active:
-            shield_text = self.small_font.render("SHIELD ACTIVE", True, PURPLE)
-            self.screen.blit(shield_text, (SCREEN_WIDTH - 200, 80))
-
-        shop_text = self.small_font.render(t['shop_hint'], True, WHITE)
-        self.screen.blit(shop_text, (SCREEN_WIDTH - 300, SCREEN_HEIGHT - 40))
+        shop_text = self.small_font.render(t['shop_hint'], True, (27, 51, 135))
+        self.screen.blit(shop_text, (SCREEN_WIDTH // 2 - shop_text.get_width() // 2, 20))
 
     def draw_question(self):
         # Apply camera shake offset
         shake_x = int(self.shake_offset_x)
         shake_y = int(self.shake_offset_y)
-        
+
         overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 180))
         self.screen.blit(overlay, (shake_x, shake_y))
@@ -2888,7 +2921,7 @@ class Game:
 
         total_text_height = sum(line.get_height() for line in wrapped_lines) + (len(wrapped_lines) - 1) * line_spacing
         question_y = question_start_y + (120 - total_text_height) // 2
-        
+
         for i, line_surface in enumerate(wrapped_lines):
             y_pos = question_y + i * (line_surface.get_height() + line_spacing)
             x_pos = SCREEN_WIDTH // 2 - line_surface.get_width() // 2 + shake_x
@@ -2930,7 +2963,7 @@ class Game:
 
             if alpha < 255:
                 result_text.set_alpha(alpha)
-            
+
             self.screen.blit(result_text, (x_pos, y_pos))
 
         if self.show_result and not self.feedback_popup_text:
@@ -2939,7 +2972,8 @@ class Game:
                     result_text = self.font.render(t['correct'], True, GREEN)
                 else:
                     result_text = self.font.render(t['wrong'], True, RED)
-                self.screen.blit(result_text, (SCREEN_WIDTH // 2 - result_text.get_width() // 2 + shake_x, 400 + shake_y))
+                self.screen.blit(result_text,
+                                 (SCREEN_WIDTH // 2 - result_text.get_width() // 2 + shake_x, 400 + shake_y))
             else:
                 self.state = PLAYING
 
@@ -2976,7 +3010,7 @@ class Game:
 
         total_text_height = sum(line.get_height() for line in wrapped_lines) + (len(wrapped_lines) - 1) * line_spacing
         hint_y = hint_start_y + (200 - total_text_height) // 2
-        
+
         for i, line_surface in enumerate(wrapped_lines):
             y_pos = hint_y + i * (line_surface.get_height() + line_spacing)
             x_pos = SCREEN_WIDTH // 2 - line_surface.get_width() // 2
@@ -2992,7 +3026,7 @@ class Game:
         t = TRANSLATIONS[self.language]
 
         title_rect = pygame.Rect(0, 0, 1023, 161)
-        draw_text_centered(self.screen, t['instructions_title'], title_rect, self.game_font, BLACK)
+        draw_text_centered(self.screen, t['instructions_title'], title_rect, self.game_font, WHITE)
 
         if self.pending_difficulty == 'easy':
             controls_text = t['easy_controls']
@@ -3012,7 +3046,7 @@ class Game:
 
         for line in controls_text.split('\n'):
             if line.strip():
-                line_surface = render_text_with_outline(self.game_font_tiny, line.strip(), GREEN, BLACK, 0)
+                line_surface = render_text_with_outline(self.game_font_tiny, line.strip(), (27, 51, 135), BLACK, 0)
                 self.screen.blit(line_surface, (SCREEN_WIDTH // 2 - line_surface.get_width() // 2, y_offset))
                 y_offset += line_height
 
@@ -3020,7 +3054,7 @@ class Game:
 
         for line in objective_text.split('\n'):
             if line.strip():
-                line_surface = render_text_with_outline(self.game_font_tiny, line.strip(), GREEN, BLACK, 0)
+                line_surface = render_text_with_outline(self.game_font_tiny, line.strip(), (27, 51, 135), BLACK, 0)
                 self.screen.blit(line_surface, (SCREEN_WIDTH // 2 - line_surface.get_width() // 2, y_offset))
                 y_offset += line_height
 
@@ -3040,12 +3074,12 @@ class Game:
         if self.play_button_img:
             play_button = ImageButton(
                 SCREEN_WIDTH // 2 - 100,
-                SCREEN_HEIGHT - 140,
+                SCREEN_HEIGHT - 150,
                 self.play_button_img,
                 self.play_button_hover
             )
             play_button.check_hover(pygame.mouse.get_pos())
-            play_button.draw(self.screen, TRANSLATIONS[self.language]['play_button'], self.game_font_small, BLACK)
+            play_button.draw(self.screen, TRANSLATIONS[self.language]['play_button'], self.game_font_small, WHITE)
             self.instructions_play_button = play_button
         else:
             self.instructions_play_button = None
@@ -3075,20 +3109,20 @@ class Game:
             correct_label = "Correct"
             incorrect_label = "Incorrect"
 
-        title_surface = self.profile_font_title.render(title_text, True, BLACK)
+        title_surface = self.profile_font_title.render(title_text, True, WHITE)
         title_rect = title_surface.get_rect(center=(500, 68))
         self.screen.blit(title_surface, title_rect)
 
-        easy_title_surf = self.profile_font_text.render(easy_label, True, BROWN)
-        easy_title_rect = easy_title_surf.get_rect(center=(200, 200))
+        easy_title_surf = self.profile_font_text.render(easy_label, True, (27, 51, 135))
+        easy_title_rect = easy_title_surf.get_rect(center=(230, 200))
         self.screen.blit(easy_title_surf, easy_title_rect)
 
-        normal_title_surf = self.profile_font_text.render(normal_label, True, BROWN)
+        normal_title_surf = self.profile_font_text.render(normal_label, True, (27, 51, 135))
         normal_title_rect = normal_title_surf.get_rect(center=(500, 200))
         self.screen.blit(normal_title_surf, normal_title_rect)
 
-        hard_title_surf = self.profile_font_text.render(hard_label, True, BROWN)
-        hard_title_rect = hard_title_surf.get_rect(center=(790, 200))
+        hard_title_surf = self.profile_font_text.render(hard_label, True, (27, 51, 135))
+        hard_title_rect = hard_title_surf.get_rect(center=(770, 200))
         self.screen.blit(hard_title_surf, hard_title_rect)
 
         easy_stats = stats["easy"]
@@ -3096,50 +3130,51 @@ class Game:
         hard_stats = stats["hard"]
         question_stats = stats["questions"]
 
-        easy_coins_surf = self.profile_font_text.render(f"{coins_label}: {easy_stats['coins']}", True, BROWN)
-        easy_coins_rect = easy_coins_surf.get_rect(topleft=(85, 223))
+        easy_coins_surf = self.profile_font_text.render(f"{coins_label}: {easy_stats['coins']}", True, (27, 51, 135))
+        easy_coins_rect = easy_coins_surf.get_rect(topleft=(105, 223))
         self.screen.blit(easy_coins_surf, easy_coins_rect)
 
-        normal_coins_surf = self.profile_font_text.render(f"{coins_label}: {normal_stats['coins']}", True, BROWN)
-        normal_coins_rect = normal_coins_surf.get_rect(topleft=(375, 223))
+        normal_coins_surf = self.profile_font_text.render(f"{coins_label}: {normal_stats['coins']}", True,
+                                                          (27, 51, 135))
+        normal_coins_rect = normal_coins_surf.get_rect(topleft=(395, 223))
         self.screen.blit(normal_coins_surf, normal_coins_rect)
 
-        hard_coins_surf = self.profile_font_text.render(f"{coins_label}: {hard_stats['coins']}", True, BROWN)
-        hard_coins_rect = hard_coins_surf.get_rect(topleft=(675, 223))
+        hard_coins_surf = self.profile_font_text.render(f"{coins_label}: {hard_stats['coins']}", True, (27, 51, 135))
+        hard_coins_rect = hard_coins_surf.get_rect(topleft=(650, 223))
         self.screen.blit(hard_coins_surf, hard_coins_rect)
 
         easy_comp_surf = self.profile_font_text.render(
-            f"{completions_label}: {easy_stats['completions']}", True, BROWN
+            f"{completions_label}: {easy_stats['completions']}", True, (27, 51, 135)
         )
-        easy_comp_rect = easy_comp_surf.get_rect(topleft=(85, 255))
+        easy_comp_rect = easy_comp_surf.get_rect(topleft=(105, 255))
         self.screen.blit(easy_comp_surf, easy_comp_rect)
 
         normal_comp_surf = self.profile_font_text.render(
-            f"{completions_label}: {normal_stats['completions']}", True, BROWN
+            f"{completions_label}: {normal_stats['completions']}", True, (27, 51, 135)
         )
-        normal_comp_rect = normal_comp_surf.get_rect(topleft=(375, 255))
+        normal_comp_rect = normal_comp_surf.get_rect(topleft=(395, 255))
         self.screen.blit(normal_comp_surf, normal_comp_rect)
 
         hard_comp_surf = self.profile_font_text.render(
-            f"{completions_label}: {hard_stats['completions']}", True, BROWN
+            f"{completions_label}: {hard_stats['completions']}", True, (27, 51, 135)
         )
-        hard_comp_rect = hard_comp_surf.get_rect(topleft=(675, 255))
+        hard_comp_rect = hard_comp_surf.get_rect(topleft=(650, 255))
         self.screen.blit(hard_comp_surf, hard_comp_rect)
 
         q_total_surf = self.profile_font_text.render(
-            f"{questions_answered_label}: {question_stats['total']}", True, BROWN
+            f"{questions_answered_label}: {question_stats['total']}", True, (27, 51, 135)
         )
         q_total_rect = q_total_surf.get_rect(topleft=(170, 345))
         self.screen.blit(q_total_surf, q_total_rect)
 
         q_correct_surf = self.profile_font_text.render(
-            f"{correct_label}: {question_stats['correct']}", True, BROWN
+            f"{correct_label}: {question_stats['correct']}", True, (27, 51, 135)
         )
         q_correct_rect = q_correct_surf.get_rect(topleft=(170, 385))
         self.screen.blit(q_correct_surf, q_correct_rect)
 
         q_incorrect_surf = self.profile_font_text.render(
-            f"{incorrect_label}: {question_stats['incorrect']}", True, BROWN
+            f"{incorrect_label}: {question_stats['incorrect']}", True, (27, 51, 135)
         )
         q_incorrect_rect = q_incorrect_surf.get_rect(topleft=(170, 425))
         self.screen.blit(q_incorrect_surf, q_incorrect_rect)
@@ -3164,8 +3199,8 @@ class Game:
             xp_text = f"Вкупно XP: {total_xp}"
         else:
             xp_text = f"Total XP: {total_xp}"
-        
-        xp_surf = self.profile_font_text.render(xp_text, True, BROWN)
+
+        xp_surf = self.profile_font_text.render(xp_text, True, (27, 51, 135))
         xp_rect = xp_surf.get_rect(topleft=(720, 445))
         self.screen.blit(xp_surf, xp_rect)
 
@@ -3191,7 +3226,7 @@ class Game:
         t = TRANSLATIONS[self.language]
 
         title_rect = pygame.Rect(30, 0, 930, 150)
-        draw_text_centered(self.screen, t['shop_title'], title_rect, self.game_font, BLACK)
+        draw_text_centered(self.screen, t['shop_title'], title_rect, self.game_font, WHITE)
         coins_text = render_text_with_outline(self.game_font_small, f"{t['coins']}: {self.coins}", YELLOW, BLACK, 2)
         self.screen.blit(coins_text, (SCREEN_WIDTH // 2 - coins_text.get_width() // 2, 145))
 
@@ -3238,15 +3273,15 @@ class Game:
             current_time = pygame.time.get_ticks()
             if current_time - self.shop_message_timer < 2000:
                 is_success = self.shop_message == t['success']
-                message_color = GREEN if is_success else RED
+                message_color = (27, 51, 135)  # if is_success else RED
                 message_text = render_text_with_outline(self.game_font_small, self.shop_message, message_color, BLACK,
-                                                        2)
-                self.screen.blit(message_text, (SCREEN_WIDTH // 2 - message_text.get_width() // 2, SCREEN_HEIGHT - 100))
+                                                        0)
+                self.screen.blit(message_text, (SCREEN_WIDTH // 2 - message_text.get_width() // 2, SCREEN_HEIGHT // 2))
             else:
                 self.shop_message = None
 
-        back_text = render_text_with_outline(self.game_font_tiny, t['back'], GRAY, BLACK, 2)
-        self.screen.blit(back_text, (SCREEN_WIDTH // 2 - back_text.get_width() // 2, SCREEN_HEIGHT - 40))
+        back_text = render_text_with_outline(self.game_font_tiny, t['back'], WHITE, BLACK, 2)
+        self.screen.blit(back_text, (SCREEN_WIDTH // 2 - back_text.get_width() // 2, SCREEN_HEIGHT - 45))
 
     def draw_game_over(self):
         if self.game_over_bg:
@@ -3259,12 +3294,12 @@ class Game:
         if self.menu_button_img:
             menu_button = ImageButton(
                 SCREEN_WIDTH // 2 - 100,
-                SCREEN_HEIGHT - 80,
+                SCREEN_HEIGHT - 100,
                 self.menu_button_img,
                 self.menu_button_hover
             )
             menu_button.check_hover(pygame.mouse.get_pos())
-            menu_button.draw(self.screen, TRANSLATIONS[self.language]['menu_button'], self.game_font_small, BLACK)
+            menu_button.draw(self.screen, TRANSLATIONS[self.language]['menu_button'], self.game_font_small, WHITE)
             self.game_over_menu_button = menu_button
         else:
             self.game_over_menu_button = None
@@ -3279,10 +3314,10 @@ class Game:
 
         stats_y = SCREEN_HEIGHT // 2 + 20
 
-        coins_text = render_text_with_outline(self.game_font_small, f"{t['coins']}: {self.coins}", YELLOW, BLACK, 2)
+        coins_text = render_text_with_outline(self.game_font_small, f"{t['coins']}: {self.coins}", WHITE, BLACK, 2)
         self.screen.blit(coins_text, (SCREEN_WIDTH // 2 - coins_text.get_width() // 2, stats_y - 20))
 
-        lives_text = render_text_with_outline(self.game_font_small, f"{t['lives']}: {self.lives}", RED, BLACK, 2)
+        lives_text = render_text_with_outline(self.game_font_small, f"{t['lives']}: {self.lives}", WHITE, BLACK, 2)
         self.screen.blit(lives_text, (SCREEN_WIDTH // 2 - lives_text.get_width() // 2, stats_y + 20))
 
         level_text = render_text_with_outline(self.game_font_tiny, f"{t['level']} {self.current_level}/5", WHITE, BLACK,
@@ -3300,7 +3335,7 @@ class Game:
                 self.next_button_hover
             )
             next_button.check_hover(mouse_pos)
-            next_button.draw(self.screen, TRANSLATIONS[self.language]['next_button'], self.game_font_small, BLACK)
+            next_button.draw(self.screen, TRANSLATIONS[self.language]['next_button'], self.game_font_small, WHITE)
             self.level_complete_next_button = next_button
         else:
             self.level_complete_next_button = None
@@ -3313,7 +3348,7 @@ class Game:
                 self.menu_button_hover
             )
             menu_button.check_hover(mouse_pos)
-            menu_button.draw(self.screen, TRANSLATIONS[self.language]['menu_button'], self.game_font_small, BLACK)
+            menu_button.draw(self.screen, TRANSLATIONS[self.language]['menu_button'], self.game_font_small, WHITE)
             self.level_complete_menu_button = menu_button
         else:
             self.level_complete_menu_button = None
@@ -3329,25 +3364,6 @@ class Game:
 
         t = TRANSLATIONS[self.language]
 
-        # Display final stats with outline for readability
-        # stats_y = SCREEN_HEIGHT // 2 - 50
-        #
-        # total_coins_text = render_text_with_outline(self.game_font_small, f"{t['total_coins']}: {self.total_coins}",
-        #                                             YELLOW, BLACK, 2)
-        # self.screen.blit(total_coins_text, (SCREEN_WIDTH // 2 - total_coins_text.get_width() // 2, stats_y))
-        #
-        # if not DIFFICULTY_SETTINGS[self.difficulty]['auto_run'] and not DIFFICULTY_SETTINGS[self.difficulty][
-        #     'is_vertical']:
-        #     total_time_text = render_text_with_outline(self.game_font_small,
-        #                                                f"{t['total_time']}: {int(self.total_time_spent)}s", WHITE,
-        #                                                BLACK, 2)
-        #     self.screen.blit(total_time_text, (SCREEN_WIDTH // 2 - total_time_text.get_width() // 2, stats_y + 40))
-        #
-        # if DIFFICULTY_SETTINGS[self.difficulty].get('is_vertical'):
-        #     altitude_text = render_text_with_outline(self.game_font_small, f"{t['altitude']}: {int(self.altitude)}m",
-        #                                              WHITE, BLACK, 2)
-        #     self.screen.blit(altitude_text, (SCREEN_WIDTH // 2 - altitude_text.get_width() // 2, stats_y + 40))
-
         if self.menu_button_img:
             menu_button = ImageButton(
                 SCREEN_WIDTH // 2 - 100,
@@ -3356,7 +3372,7 @@ class Game:
                 self.menu_button_hover
             )
             menu_button.check_hover(pygame.mouse.get_pos())
-            menu_button.draw(self.screen, TRANSLATIONS[self.language]['menu_button'], self.game_font_small, BLACK)
+            menu_button.draw(self.screen, TRANSLATIONS[self.language]['menu_button'], self.game_font_small, WHITE)
             self.mode_victory_menu_button = menu_button
         else:
             self.mode_victory_menu_button = None
@@ -3390,7 +3406,7 @@ class Game:
                     self.state = PLAYING
                     self.confetti_particles = []
 
-    def run(self):
+    async def run(self):
         running = True
         while running:
             for event in pygame.event.get():
@@ -3440,13 +3456,13 @@ class Game:
                                 self.create_level_vertical()
                             else:
                                 if not DIFFICULTY_SETTINGS[self.difficulty]['auto_run'] and not \
-                                DIFFICULTY_SETTINGS[self.difficulty]['is_vertical']:
+                                        DIFFICULTY_SETTINGS[self.difficulty]['is_vertical']:
                                     settings_copy = DIFFICULTY_SETTINGS[self.difficulty]
                                     base_time = settings_copy['time_limit_base']
                                     self.total_time_spent += (
-                                                base_time - (self.current_level - 2) * 10 - self.time_left)
+                                            base_time - (self.current_level - 2) * 10 - self.time_left)
                                     self.time_left = DIFFICULTY_SETTINGS[self.difficulty]['time_limit_base'] - (
-                                                self.current_level - 1) * 10
+                                            self.current_level - 1) * 10
                                 self.create_level_platformer()
                                 self.start_time = pygame.time.get_ticks()
 
@@ -3471,12 +3487,12 @@ class Game:
                             self.create_level_vertical()
                         else:
                             if not DIFFICULTY_SETTINGS[self.difficulty]['auto_run'] and not \
-                            DIFFICULTY_SETTINGS[self.difficulty]['is_vertical']:
+                                    DIFFICULTY_SETTINGS[self.difficulty]['is_vertical']:
                                 settings_copy = DIFFICULTY_SETTINGS[self.difficulty]
                                 base_time = settings_copy['time_limit_base']
                                 self.total_time_spent += (base_time - (self.current_level - 2) * 10 - self.time_left)
                                 self.time_left = DIFFICULTY_SETTINGS[self.difficulty]['time_limit_base'] - (
-                                            self.current_level - 1) * 10
+                                        self.current_level - 1) * 10
                             self.create_level_platformer()
                             self.start_time = pygame.time.get_ticks()
 
@@ -3497,10 +3513,10 @@ class Game:
 
             if self.state == PLAYING:
                 self.update_playing()
-            
-            # Update hint popup timer (auto-close after 7 seconds)
+
+            # Update hint popup timer (auto-close after 5 seconds)
             if self.state == HINT:
-                if pygame.time.get_ticks() - self.hint_popup_timer >= 7000:
+                if pygame.time.get_ticks() - self.hint_popup_timer >= 3000:
                     self.state = PLAYING
                     self.current_hint_text = None
 
@@ -3533,11 +3549,13 @@ class Game:
 
             pygame.display.flip()
             self.clock.tick(FPS)
+            await asyncio.sleep(0)  # dodaeno
 
         pygame.quit()
-        sys.exit()
+        # sys.exit()
 
 
 if __name__ == "__main__":
     game = Game()
-    game.run()
+    # game.run()
+    asyncio.run(game.run())
